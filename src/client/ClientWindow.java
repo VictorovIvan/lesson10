@@ -1,81 +1,73 @@
 package client;
 
+import message.ClientMessage;
+
 import javax.swing.*;
 import java.awt.*;
 import java.awt.event.*;
-import java.io.*;
+import java.io.IOException;
+import java.io.ObjectInputStream;
+import java.io.ObjectOutputStream;
 import java.net.Socket;
-import java.util.Scanner;
 
 /**
  * Class ClientWindow
  */
-public class ClientWindow extends JFrame {
+class ClientWindow extends JFrame {
     private static final String SERVER_HOST = "localhost";
     private static final int SERVER_PORT = 3443;
     private Socket clientSocket;
-    private Scanner inMessage;
-    private PrintWriter outMessage;
+    private ObjectOutputStream objectOutputStreamToServer;
+    private ObjectInputStream objectInputStreamFromServer;
     private JTextField jtfMessage;
     private JTextArea jtaTextAreaMessage;
-    private String clientName = "";
-    private String cntInChat = "";
+    private String clientName;
+    private ClientMessage newMessage = new ClientMessage();
 
-    /**
-     * Get name of the client
-     *
-     * @return clientName Name of the client
-     */
-    public String getClientName() {
-        return this.clientName;
-    }
 
     /**
      * Constructor of the client
      *
      * @param nameClient Name of the client
      */
-    public ClientWindow(String nameClient) {
+    ClientWindow(String nameClient) {
         try {
-            clientSocket = new Socket(SERVER_HOST, SERVER_PORT);
-            inMessage = new Scanner(clientSocket.getInputStream());
-            outMessage = new PrintWriter(clientSocket.getOutputStream());
-            outMessage.println("##name##this##client##" + nameClient);
-            outMessage.flush();
+            this.clientSocket = new Socket(SERVER_HOST, SERVER_PORT);
+
+            newMessage.name = nameClient;
+            newMessage.message = nameClient;
+            newMessage.clientPrivate = "";
+            newMessage.conditionClient = ClientMessage.Condition.ENTER;
+
+            this.objectOutputStreamToServer = new ObjectOutputStream(clientSocket.getOutputStream());
+            this.objectOutputStreamToServer.writeObject(newMessage);
+            objectOutputStreamToServer.flush();
+            objectInputStreamFromServer = new ObjectInputStream(clientSocket.getInputStream());
+            newMessage.conditionClient = ClientMessage.Condition.WORK;
+
         } catch (IOException e) {
             e.printStackTrace();
         }
-
         desktopGraph(nameClient);
-        JLabel jlNumberOfClients = new JLabel("Clients in chat: ");
+        JLabel jlNumberOfClients = new JLabel("Личное сообщение:  СООБЩЕНИЕ:::ИМЯ");
         add(jlNumberOfClients, BorderLayout.NORTH);
         workClient(nameClient);
         jtfMessage.addFocusListener(new FocusAdapter() {
+
             @Override
             public void focusGained(FocusEvent e) {
                 jtfMessage.setText("");
             }
         });
 
-        new Thread(new Runnable() {
-            @Override
-            public void run() {
-                try {
-                    while (true) {
-                        if (inMessage.hasNext()) {
-                            String inMes = inMessage.nextLine();
-                            String clientsInChat = "Clients in chat = ";
-                            cntInChat = inMes;
-                            if (inMes.indexOf(clientsInChat) == 0) {
-                                jlNumberOfClients.setText(inMes);
-                            } else {
-                                jtaTextAreaMessage.append(inMes);
-                                jtaTextAreaMessage.append("\n");
-                            }
-                        }
-                    }
-                } catch (Exception e) {
+        new Thread(() -> {
+            try {
+                while (true) {
+                    String inMes = (String) objectInputStreamFromServer.readObject();
+                    jtaTextAreaMessage.append(inMes);
+                    jtaTextAreaMessage.append("\n");
                 }
+            } catch (Exception e) {
             }
         }).start();
 
@@ -87,13 +79,13 @@ public class ClientWindow extends JFrame {
             public void windowClosing(WindowEvent e) {
                 super.windowClosing(e);
                 try {
-                    outMessage.println(clientName + " вышел из чата");
-                    outMessage.println("##session##end##");
-                    outMessage.flush();
-                    outMessage.close();
-                    inMessage.close();
+
+                    objectOutputStreamToServer.writeObject(clientName + " вышел из чата");
+                    objectOutputStreamToServer.flush();
+                    objectOutputStreamToServer.close();
+                    objectInputStreamFromServer.close();
                     clientSocket.close();
-                } catch (IOException exc) {
+                } catch (IOException ignored) {
                 }
             }
         });
@@ -103,28 +95,23 @@ public class ClientWindow extends JFrame {
     /**
      * Send message from client
      */
-    public void sendMsg() {
-        String messageStr = clientName + ": " + jtfMessage.getText();
-        outMessage.println(messageStr);
-        outMessage.flush();
-        jtfMessage.setText("");
-    }
+    private void sendMsg() throws IOException {
+        clientSocket = new Socket(SERVER_HOST, SERVER_PORT);
+        objectOutputStreamToServer = new ObjectOutputStream(clientSocket.getOutputStream());
+        String[] arrayMessage;
 
-    /***
-     * Quit client from the chat
-     */
-    public void quitChat() {
-        outMessage.println(clientName + " вышел из чата");
-        outMessage.println("##session##end##");
-        outMessage.flush();
-        outMessage.close();
-        inMessage.close();
-        setVisible(false);
-        try {
-            clientSocket.close();
-        } catch (IOException e) {
-            e.printStackTrace();
+        newMessage.name = this.clientName;
+
+        arrayMessage = jtfMessage.getText().split(":::");
+        newMessage.message = arrayMessage[0];
+        if (arrayMessage.length < 2) {
+            newMessage.clientPrivate = "";
+        } else {
+            newMessage.clientPrivate = arrayMessage[1];
         }
+        this.objectOutputStreamToServer.writeObject(newMessage);
+        this.objectOutputStreamToServer.flush();
+        jtfMessage.setText("");
     }
 
     /**
@@ -141,6 +128,27 @@ public class ClientWindow extends JFrame {
         jtaTextAreaMessage.setLineWrap(true);
         JScrollPane jsp = new JScrollPane(jtaTextAreaMessage);
         add(jsp, BorderLayout.CENTER);
+    }
+
+    /***
+     * Quit client from the chat
+     */
+    private void quitChat() throws IOException {
+        clientSocket = new Socket(SERVER_HOST, SERVER_PORT);
+        this.objectOutputStreamToServer = new ObjectOutputStream(clientSocket.getOutputStream());
+
+        newMessage.conditionClient = ClientMessage.Condition.QUIT;
+        newMessage.message = clientName + " вышел из чата";
+        this.objectOutputStreamToServer.writeObject(newMessage);
+        this.objectOutputStreamToServer.flush();
+        this.objectInputStreamFromServer.close();
+
+        setVisible(false);
+        try {
+            clientSocket.close();
+        } catch (IOException e) {
+            e.printStackTrace();
+        }
     }
 
     /**
@@ -160,21 +168,27 @@ public class ClientWindow extends JFrame {
         getContentPane().setBackground(Color.LIGHT_GRAY);
         jtaTextAreaMessage.setBackground(Color.LIGHT_GRAY);
         clientName = nameClient;
-        jbSendMessage.addActionListener(new ActionListener() {
-            @Override
-            public void actionPerformed(ActionEvent e) {
-                if (!jtfMessage.getText().trim().isEmpty()) {
-                    if ((jtfMessage.getText().equalsIgnoreCase("quit"))) {
-                        if (cntInChat.equalsIgnoreCase("Clients in chat = 1")) {
-                            System.exit(0);
+        jbSendMessage.addActionListener(e -> {
+            if (!jtfMessage.getText().trim().isEmpty()) {
+                if ((jtfMessage.getText().equalsIgnoreCase("quit"))) {
+                    try {
+                        if (Thread.activeCount() > 1) {
+                            quitChat();
                         } else {
                             quitChat();
+                            System.exit(0);
                         }
-                    } else {
-                        sendMsg();
+                    } catch (IOException ex) {
+                        ex.printStackTrace();
                     }
-                    jtfMessage.grabFocus();
+                } else {
+                    try {
+                        sendMsg();
+                    } catch (IOException e1) {
+                        e1.printStackTrace();
+                    }
                 }
+                jtfMessage.grabFocus();
             }
         });
     }
